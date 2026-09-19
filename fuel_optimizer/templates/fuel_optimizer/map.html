@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fuel Route Map: {{ start_name }} → {{ finish_name }}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { width: 100%; height: 100%; font-family: 'Outfit', sans-serif; background: #0b0f19; overflow: hidden; }
+    #map { width: 100%; height: 100%; background: #0b0f19; }
+
+    /* Floating Trip Summary Panel */
+    .trip-summary-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1000;
+      background: rgba(18, 26, 43, 0.92);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      padding: 1.25rem 1.5rem;
+      color: white;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      max-width: 380px;
+      line-height: 1.4;
+    }
+
+    .trip-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #F8FAFC;
+      margin-bottom: 0.25rem;
+    }
+
+    .trip-sub {
+      font-size: 0.8rem;
+      color: #94A3B8;
+      margin-bottom: 1rem;
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .stat-box {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .stat-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: #94A3B8;
+      letter-spacing: 0.05em;
+    }
+
+    .stat-val {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #34D399;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .back-btn {
+      display: inline-block;
+      margin-top: 0.5rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #818CF8;
+      text-decoration: none;
+    }
+    .back-btn:hover { text-decoration: underline; }
+
+    /* Custom Leaflet Markers & Popups */
+    .custom-icon {
+      border-radius: 50%;
+      border: 2px solid white;
+      color: black;
+      font-weight: 800;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.5);
+    }
+    .leaflet-popup-content-wrapper {
+      background: #182238;
+      color: #F8FAFC;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+    .leaflet-popup-tip { background: #182238; }
+  </style>
+</head>
+<body>
+  <div class="trip-summary-panel">
+    <div class="trip-title">⛽ OptiFuel Route Map</div>
+    <div class="trip-sub">{{ start_name }} → {{ finish_name }}</div>
+    <div class="stats-row">
+      <div class="stat-box">
+        <span class="stat-label">Total Distance</span>
+        <span class="stat-val" style="color: white;">{{ distance_miles }} mi</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-label">Total Fuel Cost</span>
+        <span class="stat-val">${{ total_money_spent }}</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-label">Gallons Consumed</span>
+        <span class="stat-val" style="color: #93C5FD;">{{ total_gallons }} gal</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-label">Fuel Stops</span>
+        <span class="stat-val" style="color: #FBBF24;">{{ fuel_stops_count }} stops</span>
+      </div>
+    </div>
+    <a href="/" class="back-btn">← Back to Dashboard</a>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    const geojsonData = {{ geojson_str|safe }};
+
+    const map = L.map('map', {
+      zoomControl: true
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(map);
+
+    const bounds = L.latLngBounds();
+
+    const makeIcon = (color, text) => L.divIcon({
+      className: 'div-icon-wrapper',
+      html: `<div class="custom-icon" style="background: ${color}; width: 28px; height: 28px;">${text}</div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+      popupAnchor: [0, -14]
+    });
+
+    L.geoJSON(geojsonData, {
+      style: (feature) => {
+        if (feature.properties && feature.properties.role === 'route_path') {
+          return { color: '#3B82F6', weight: 5, opacity: 0.9 };
+        }
+      },
+      pointToLayer: (feature, latlng) => {
+        bounds.extend(latlng);
+        const props = feature.properties || {};
+
+        if (props.role === 'origin') {
+          return L.marker(latlng, { icon: makeIcon('#10B981', 'A') }).bindPopup(`
+            <div style="font-weight:700; color:#34D399; font-size:1rem;">Origin</div>
+            <div>${props.name}</div>
+          `);
+        } else if (props.role === 'destination') {
+          return L.marker(latlng, { icon: makeIcon('#EF4444', 'B') }).bindPopup(`
+            <div style="font-weight:700; color:#F87171; font-size:1rem;">Destination</div>
+            <div>${props.name}</div>
+          `);
+        } else if (props.role === 'fuel_stop') {
+          return L.marker(latlng, { icon: makeIcon('#F59E0B', props.stop_number) }).bindPopup(`
+            <div style="font-weight:700; color:#FBBF24; font-size:1rem;">⛽ Stop #${props.stop_number}: ${props.name}</div>
+            <div style="color:#34D399; font-weight:800; font-size:1.1rem; margin:4px 0;">$${props.price_per_gallon.toFixed(3)} / gal</div>
+            <div style="font-size:0.8rem; color:#94A3B8;">${props.address}</div>
+            <div style="font-size:0.8rem; color:#E2E8F0; margin-top:4px;">
+              Route Mile: <strong>${props.mile_marker}</strong> | Pumped: <strong>${props.gallons_refueled} gal</strong><br>
+              Cost at stop: <strong style="color:#FBBF24;">$${props.cost_at_stop.toFixed(2)}</strong>
+            </div>
+          `);
+        }
+        return L.circleMarker(latlng, { radius: 6, color: '#F59E0B' });
+      }
+    }).addTo(map);
+
+    if (bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+  </script>
+</body>
+</html>
